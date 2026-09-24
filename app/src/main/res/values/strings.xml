@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">SplatScan</string>
+
+    <string name="action_start">开始</string>
+    <string name="action_pause">暂停</string>
+    <string name="action_resume">继续</string>
+    <string name="action_stop">停止</string>
+    <string name="action_view">查看</string>
+    <string name="action_share">分享</string>
+    <string name="action_rename">重命名</string>
+    <string name="action_delete">删除</string>
+    <string name="action_back">返回</string>
+    <string name="action_export_ply">导出 PLY</string>
+    <string name="action_export_splat">导出 SPLAT</string>
+    <string name="action_export_spz">导出 SPZ</string>
+
+    <string name="state_idle">就绪</string>
+    <string name="state_scanning">采集中</string>
+    <string name="state_paused">已暂停</string>
+    <string name="state_finalizing">正在定格</string>
+
+    <string name="log_bar_title">日志</string>
+    <string name="log_accuracy">精度 %1$d%%</string>
+    <string name="log_accuracy_calibrating">精度 --</string>
+    <string name="log_fps">帧率 %1$d</string>
+    <string name="log_thermal">温度 %1$s</string>
+    <string name="log_power">电量 %1$d%% %2$s</string>
+    <string name="log_power_charging">充电中</string>
+    <string name="log_power_discharging">耗电 %1$s</string>
+    <string name="log_frames">帧 %1$d</string>
+    <string name="log_gaussians">高斯 %1$s</string>
+    <string name="log_memory">内存 %1$s</string>
+    <string name="log_optimizing">正在优化 · 第 %1$d 轮 · 预计 %2$s</string>
+    <string name="log_optimizing_done">优化完成</string>
+
+    <string name="hint_hold_still">环绕场景缓慢移动手机</string>
+    <string name="hint_tracking_lost">跟踪丢失，请放慢移动速度</string>
+    <string name="hint_thermal">设备温度偏高，已自动降低负载</string>
+    <string name="hint_low_battery">电量偏低，建议接入电源后继续</string>
+    <string name="hint_gaussian_capped">内存受限，已限制模型规模</string>
+
+    <string name="permission_title">需要摄像头权限</string>
+    <string name="permission_body">扫描需要访问摄像头。应用不联网，所有数据只保存在本机。</string>
+    <string name="permission_grant">授予权限</string>
+
+    <string name="history_title">扫描记录</string>
+    <string name="history_empty">还没有扫描记录</string>
+    <string name="history_meta">%1$s · 高斯 %2$s · 精度 %3$d%%</string>
+    <string name="history_rename_title">重命名扫描</string>
+    <string name="history_delete_title">删除这条扫描？</string>
+    <string name="history_delete_body">删除后无法恢复。</string>
+    <string name="action_cancel">取消</string>
+    <string name="action_confirm">确定</string>
+    <string name="action_save">保存</string>
+
+    <string name="viewer_loading">正在载入模型</string>
+    <string name="viewer_empty">模型为空</string>
+    <string name="viewer_hint">单指旋转 · 双指缩放</string>
+</resources>
