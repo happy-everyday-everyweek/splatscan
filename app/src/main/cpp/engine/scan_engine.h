@@ -1,0 +1,198 @@
+#pragma once
+
+#include <android/native_window.h>
+
+#include <atomic>
+#include <cstdint>
+#include <mutex>
+#include <string>
+#include <thread>
+#include <vector>
+
+#include "core/math_types.h"
+#include "gs/gaussian_params.h"
+#include "gs/raster_cpu.h"
+#include "render/vulkan_renderer.h"
+#include "vio/feature_tracker.h"
+
+namespace splatscan {
+
+enum class EngineState { Idle, Scanning, Paused };
+
+struct EngineConfig {
+    int32_t trainWidth = 160;
+    int32_t trainHeight = 120;
+    int32_t maxGaussians = 40000;
+    int32_t iterationsPerBatch = 4;
+    int32_t maxFeatures = 200;
+    float learningRate = 0.02f;
+};
+
+struct EngineStatus {
+    int32_t acceptedFrames = 0;
+    int32_t rejectedFrames = 0;
+    float stability = 0.0f;
+    float coverage = 0.0f;
+    int32_t gaussianCount = 0;
+    int32_t rounds = 0;
+    int32_t trackedFeatures = 0;
+    float residual = 1.0f;
+    float modelMemoryMb = 0.0f;
+    bool memoryCapped = false;
+    bool initialized = false;
+    bool vulkanActive = false;
+    float lastRingX = 0.5f;
+    float lastRingY = 0.5f;
+    /** 渲染线程这一帧实际交给 GPU 的高斯与瓦片数量，用来判断渲染链路有没有数据。 */
+    int32_t renderedSplats = 0;
+    int32_t renderedTiles = 0;
+    /** 渲染线程自己量出来的帧率。Vulkan 直出时界面拿不到别的帧率信号。 */
+    float renderFps = 0.0f;
+};
+
+/**
+ * 扫描引擎：把相机帧与惯性数据变成不断生长的高斯模型。
+ *
+ * 三条流程：初始化（首帧铺一层高斯）、跟踪（特征 + IMU 求位姿）、增量训练
+ * （每个关键帧批次跑若干次可微光栅化迭代）。暂停时继续用已收下的帧反复优化。
+ */
+class ScanEngine {
+public:
+    explicit ScanEngine(EngineConfig config);
+    ~ScanEngine();
+
+    ScanEngine(const ScanEngine&) = delete;
+    ScanEngine& operator=(const ScanEngine&) = delete;
+
+    void start();
+    void pause();
+    void stop();
+
+    void submitFrame(const uint8_t* y, int32_t width, int32_t height, int32_t yStride,
+                     const uint8_t* u, const uint8_t* v, int32_t uvStride, int32_t uvPixelStride,
+                     int64_t timestampNs);
+
+    void submitImu(float ax, float ay, float az, float gx, float gy, float gz,
+                   int64_t timestampNs);
+
+    /** 由界面按固定节奏调用：消化待处理帧、推进训练。 */
+    void step();
+
+    void renderPreview(std::vector<uint8_t>& rgba, int32_t width, int32_t height);
+
+    /** 绑定渲染目标表面：成功则启动渲染线程用 Vulkan 直出，失败返回 false 并由界面回退到 CPU 预览。 */
+    bool attachSurface(ANativeWindow* window);
+    void detachSurface();
+    bool vulkanActive() const { return rendererReady_; }
+
+    bool writePly(const std::string& path) const;
+
+    /** 查看器：从 PLY 载入模型，用轨道相机绕模型中心旋转缩放。 */
+    bool loadModel(const std::string& path);
+    /** 关闭后完全不用画面求位移，只保留 IMU 提供的旋转（便于排查跟踪算法本身）。 */
+    void setVisionPose(bool enabled);
+    /**
+     * 单目深度模型给出的初模。depth 为行优先的相对深度（约定：数值越大越近），
+     * 它会按训练图的方向重采样，并在收到后重建首帧模型。
+     */
+    bool submitDepth(int32_t width, int32_t height, const float* depth, int32_t count);
+    /** 深度模型确认不可用时立刻告知，避免首帧白等到超时。 */
+    void markDepthUnavailable();
+    void setViewerMode(bool enabled);
+    void setViewerOrbit(float yawRadians, float pitchRadians, float zoom);
+    bool viewerMode() const { return viewerMode_; }
+
+    void reconfigure(int32_t trainWidth, int32_t trainHeight, int32_t maxGaussians,
+                     int32_t iterationsPerBatch);
+
+    const EngineStatus& status() const { return status_; }
+
+private:
+    void initializeFromFrame(const std::vector<uint8_t>& rgb);
+    void processFrame(const std::vector<uint8_t>& rgb, const std::vector<uint8_t>& gray);
+    void trainOnImage(const std::vector<uint8_t>& rgb, const Pose& pose);
+    void updateCoverage();
+    void renderLoop();
+    void updateViewerPose();
+    void updatePoseFromCamera();
+    /** 按长边与相机真实画幅计算训练图尺寸，返回尺寸是否变化。 */
+    bool applyTrainingSize(int32_t longSide);
+    static void downsample(const uint8_t* y, int32_t width, int32_t height, int32_t yStride,
+                           const uint8_t* u, const uint8_t* v, int32_t uvStride,
+                           int32_t uvPixelStride, int32_t outWidth, int32_t outHeight, bool rotate,
+                           std::vector<uint8_t>& rgb, std::vector<uint8_t>& gray);
+
+    EngineConfig config_;
+    EngineStatus status_ = {};
+    EngineState state_ = EngineState::Idle;
+
+    GaussianParams model_;
+    CpuRasterizer rasterizer_;
+    FeatureTracker tracker_;
+    CameraIntrinsics camera_ = {};
+
+    Pose pose_ = {};
+    Mat3 rotation_ = Mat3::identity();
+    /** 相机在世界里的中心与朝向。位姿由它们推导，避免把增量平移直接累加到 t 上。 */
+    Vec3 cameraCenter_{0.0f, 0.0f, 0.0f};
+    Mat3 cameraRotation_ = Mat3::identity();
+    Mat3 previousRotation_ = Mat3::identity();
+    Vec3 gravity_{0.0f, 0.0f, 0.0f};
+    int64_t lastImuNs_ = 0;
+    /** 相机帧的真实画幅，用来推导训练图尺寸；写死比例会让投影几何歪掉。 */
+    float frameAspect_ = 4.0f / 3.0f;
+    bool aspectInitialized_ = false;
+    /** 相机缓冲通常是横向的，而界面锁竖屏：降采样时转 90°，训练图与模型窗口都变成竖向。 */
+    bool rotateFrames_ = false;
+    /** 是否用画面（特征跟踪 + 对极求解）估计位移。关掉后只有 IMU 旋转。 */
+    bool visionPose_ = true;
+    /** 平移尺度需要跨帧平滑：每帧各自定标的话，帧间几何互相矛盾，模型会糊成一片。 */
+    float translationScale_ = 0.0f;
+
+    /** 多视图缓冲：只对着最新一帧优化会退化成「贴着相机的平面」。 */
+    struct ViewSample {
+        std::vector<uint8_t> rgb;
+        Pose pose;
+    };
+    std::vector<ViewSample> views_;
+
+    /** 深度模型的估计结果；首帧模型要么等它，要么超时后用平面初值兜底。 */
+    bool depthReady_ = false;
+    bool depthFailed_ = false;
+    int32_t depthWidth_ = 0;
+    int32_t depthHeight_ = 0;
+    std::vector<float> depthMap_;
+    bool firstFrameStored_ = false;
+    std::vector<uint8_t> firstRgb_;
+    Mat3 firstRotation_ = Mat3::identity();
+    int32_t waitingFrames_ = 0;
+    void initializeFromDepth(const std::vector<uint8_t>& rgb);
+
+    std::vector<uint8_t> lastGray_;
+    std::vector<uint8_t> lastRgb_;
+    std::vector<FeaturePoint> features_;
+    std::vector<FeatureTrack> tracks_;
+
+    bool hasPendingFrame_ = false;
+    std::vector<uint8_t> pendingRgb_;
+    std::vector<uint8_t> pendingGray_;
+    int64_t pendingTimestampNs_ = 0;
+
+    // 模型被训练线程与渲染线程共享，所有访问都要走这把锁
+    std::mutex modelMutex_;
+    std::mutex rendererMutex_;
+    VulkanRenderer renderer_;
+    std::thread renderThread_;
+    std::atomic<bool> renderRunning_{false};
+    bool rendererReady_ = false;
+    ANativeWindow* window_ = nullptr;
+
+    bool viewerMode_ = false;
+    float viewerYaw_ = 0.0f;
+    float viewerPitch_ = 0.35f;
+    float viewerZoom_ = 1.0f;
+    Vec3 viewerFocus_{0.0f, 0.0f, 0.0f};
+    float viewerRadius_ = 1.0f;
+};
+
+}  // namespace splatscan
