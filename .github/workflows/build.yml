@@ -1,0 +1,85 @@
+name: build
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Prepare Android SDK and NDK
+        run: |
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          echo "SDK root: $SDK"
+          ls "$SDK" || true
+          SDKMGR=$(find "$SDK/cmdline-tools" -name sdkmanager -type f 2>/dev/null | head -1)
+          if [ -z "$SDKMGR" ]; then
+            echo "sdkmanager not found, installing cmdline-tools"
+            mkdir -p "$SDK/cmdline-tools"
+            curl -sSL -o /tmp/cmdtools.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+            unzip -q /tmp/cmdtools.zip -d "$SDK/cmdline-tools"
+            mv "$SDK/cmdline-tools/cmdline-tools" "$SDK/cmdline-tools/latest"
+            SDKMGR="$SDK/cmdline-tools/latest/bin/sdkmanager"
+          fi
+          echo "SDKMANAGER=$SDKMGR" >> "$GITHUB_ENV"
+          yes | "$SDKMGR" --licenses > /dev/null 2>&1 || true
+          "$SDKMGR" --install "ndk;27.2.12479018" "cmake;3.22.1" "platforms;android-36" "build-tools;36.0.0"
+          echo "$SDK/ndk/27.2.12479018" 
+          ls "$SDK/ndk"
+
+      - name: Install shader toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq glslang-tools
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 9.6.1
+
+      - name: Unit tests
+        run: gradle :app:testDebugUnitTest --console=plain
+
+      - name: Build debug and release
+        run: gradle :app:assembleDebug :app:assembleRelease --console=plain
+
+      - name: Verify release signature
+        run: |
+          BUILD_TOOLS=$(ls -d "${ANDROID_HOME}"/build-tools/* | tail -1)
+          APK=$(ls app/build/outputs/apk/release/*.apk | head -1)
+          "$BUILD_TOOLS/apksigner" verify --print-certs "$APK" | head -5
+
+      - name: Upload APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: splatscan-apks
+          path: |
+            app/build/outputs/apk/debug/*.apk
+            app/build/outputs/apk/release/*.apk
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            app/build/outputs/apk/debug/*.apk
+            app/build/outputs/apk/release/*.apk
+          generate_release_notes: true
