@@ -1,0 +1,20 @@
+*.iml
+.gradle/
+.kotlin/
+.idea/
+.DS_Store
+build/
+app/build/
+captures/
+.cxx/
+.externalNativeBuild/
+local.properties
+*.apk
+*.aab
+*.hprof
+output-metadata.json
+.backup/
+# 深度模型不进仓库：94MB 超过 GitHub API 单次推送上限，由 CI 构建时拉取。
+app/src/main/assets/*.onnx
+.operit/
+tools/aapt2/
